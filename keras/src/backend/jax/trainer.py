@@ -20,174 +20,16 @@ from keras.src.trainers.epoch_iterator import EpochIterator
 from keras.src.utils import traceback_utils
 
 def enzyme(f, train):
-    from enzyme_ad.jax import enzyme_jax_ir, NewXLAPipeline, OldXLAPipeline, JaXPipeline
+    from enzyme_ad.jax import enzyme_jax_ir, full_optimization_pass_pipeline
 
-    pipeline = JaXPipeline("""
-builtin.module(
-inline{default-pipeline=canonicalize max-iterations=4},
-canonicalize,cse,
-canonicalize,
-enzyme-hlo-generate-td{
-patterns=
-compare_op_canon<16>;
-broadcast_in_dim_op_canon<16>;
-convert_op_canon<16>;
-dynamic_broadcast_in_dim_op_not_actually_dynamic<16>;
-chained_dynamic_broadcast_in_dim_canonicalization<16>;
-dynamic_broadcast_in_dim_all_dims_non_expanding<16>;
-noop_reduce_op_canon<16>;
-empty_reduce_op_canon<16>;
-dynamic_reshape_op_canon<16>;
-get_tuple_element_op_canon<16>;
-real_op_canon<16>;
-imag_op_canon<16>;
-get_dimension_size_op_canon<16>;
-gather_op_canon<16>;
-reshape_op_canon<16>;
-merge_consecutive_reshapes<16>;
-transpose_is_reshape<16>;
-zero_extent_tensor_canon<16>;
-reorder_elementwise_and_shape_op<16>;
-
-cse_broadcast_in_dim<16>;
-cse_slice<16>;
-cse_transpose<16>;
-cse_convert<16>;
-cse_pad<16>;
-cse_dot_general<16>;
-cse_reshape<16>;
-cse_mul<16>;
-cse_div<16>;
-cse_add<16>;
-cse_subtract<16>;
-cse_min<16>;
-cse_max<16>;
-cse_neg<16>;
-cse_concatenate<16>;
-
-concatenate_op_canon<16>(1024);
-select_op_canon<16>(1024);
-add_simplify<16>;
-sub_simplify<16>;
-and_simplify<16>;
-max_simplify<16>;
-min_simplify<16>;
-or_simplify<16>;
-negate_simplify<16>;
-mul_simplify<16>;
-div_simplify<16>;
-rem_simplify<16>;
-pow_simplify<16>;
-sqrt_simplify<16>;
-cos_simplify<16>;
-sin_simplify<16>;
-noop_slice<16>;
-const_prop_through_barrier<16>;
-slice_slice<16>;
-shift_right_logical_simplify<16>;
-pad_simplify<16>;
-negative_pad_to_slice<16>;
-tanh_simplify<16>;
-exp_simplify<16>;
-slice_simplify<16>;
-convert_simplify<16>;
-reshape_simplify<16>;
-dynamic_slice_to_static<16>;
-dynamic_update_slice_elim<16>;
-concat_to_broadcast<16>;
-reduce_to_reshape<16>;
-broadcast_to_reshape<16>;
-gather_simplify<16>;
-iota_simplify<16>(1024);
-broadcast_in_dim_simplify<16>(1024);
-convert_concat<1>;
-dynamic_update_to_concat<1>;
-slice_of_dynamic_update<1>;
-slice_elementwise<1>;
-slice_pad<1>;
-dot_reshape_dot<1>;
-concat_const_prop<1>;
-concat_fuse<1>;
-pad_reshape_pad<1>;
-pad_pad<1>;
-concat_push_binop_add<1>;
-concat_push_binop_mul<1>;
-scatter_to_dynamic_update_slice<1>;
-reduce_concat<1>;
-slice_concat<1>;
-
-bin_broadcast_splat_add<1>;
-bin_broadcast_splat_subtract<1>;
-bin_broadcast_splat_div<1>;
-bin_broadcast_splat_mul<1>;
-reshape_iota<16>;
-slice_reshape_slice<1>;
-dot_general_simplify<16>;
-transpose_simplify<16>;
-reshape_empty_broadcast<1>;
-add_pad_pad_to_concat<1>;
-broadcast_reshape<1>;
-
-slice_reshape_concat<1>;
-slice_reshape_elementwise<1>;
-slice_reshape_transpose<1>;
-slice_reshape_dot_general<1>;
-concat_pad<1>;
-
-reduce_pad<1>;
-broadcast_pad<1>;
-
-zero_product_reshape_pad<1>;
-mul_zero_pad<1>;
-div_zero_pad<1>;
-
-binop_const_reshape_pad<1>;
-binop_const_pad_add<1>;
-binop_const_pad_subtract<1>;
-binop_const_pad_mul<1>;
-binop_const_pad_div<1>;
-
-slice_reshape_pad<1>;
-binop_binop_pad_pad_add<1>;
-binop_binop_pad_pad_mul<1>;
-binop_pad_pad_add<1>;
-binop_pad_pad_subtract<1>;
-binop_pad_pad_mul<1>;
-binop_pad_pad_div<1>;
-binop_pad_pad_min<1>;
-binop_pad_pad_max<1>;
-
-unary_pad_push_convert<1>;
-unary_pad_push_tanh<1>;
-unary_pad_push_exp<1>;
-
-transpose_pad<1>;
-
-transpose_dot_reorder<1>;
-dot_transpose<1>;
-convert_convert_float<1>;
-concat_to_pad<1>;
-concat_appending_reshape<1>;
-reshape_iota<1>;
-
-broadcast_reduce<1>;
-slice_dot_general<1>;
-
-dot_reshape_pad<1>;
-pad_dot_general<1>(1);
-pad_dot_general<1>(0);
-},
-transform-interpreter,
-enzyme-hlo-remove-transform
-)""")
+    pipeline = JaXPipeline(full_optimization_pass_pipeline())
     print("Enzyme pipeline!")
     if train:
-            return enzyme_jax_ir(pipeline_options=pipeline, jit_options={"donate_argnums":0})(f)
+        return enzyme_jax_ir(pipeline_options=pipeline, jit_options={"donate_argnums": 0})(f)
     else:
-            return enzyme_jax_ir(pipeline_options=pipeline)(f)
+        return enzyme_jax_ir(pipeline_options=pipeline)(f)
 
 def enzyme_pre(f):
-    return f
     return enzyme(f, False)
 
 class JAXTrainer(base_trainer.Trainer):
@@ -288,11 +130,8 @@ class JAXTrainer(base_trainer.Trainer):
         ) = state
         x, y, sample_weight = data_adapter_utils.unpack_x_y_sample_weight(data)
 
-        loss = self.compute_loss_and_updates
-        loss = enzyme_pre(loss)
-
         grad_fn = jax.value_and_grad(
-            loss, has_aux=True
+            enzyme_pre(self.compute_loss_and_updates), has_aux=True
         )
         (loss, aux), grads = grad_fn(
             trainable_variables,
@@ -447,22 +286,6 @@ class JAXTrainer(base_trainer.Trainer):
         if self.train_function is not None and not force:
             return
 
-        def one_train_step(state, data):
-            data = data[0]
-            return self.train_step(state, data)
-
-        def multi_train_steps(state, data):
-            for single_step_data in data:
-                logs, state = one_train_step(state, [single_step_data])
-            return logs, state
-
-        if self.steps_per_execution > 1:
-            train_step = multi_train_steps
-        else:
-            train_step = one_train_step
-        
-        if True: train_step = enzyme(train_step, True)
-
         if not self.run_eagerly and self.jit_compile:
             # Note that we mark the state to be donated to jax,
             # so that jax will reuse the memory buffer for outputs.
@@ -471,6 +294,9 @@ class JAXTrainer(base_trainer.Trainer):
             train_step = jax.jit(self.train_step, donate_argnums=0)
         else:
             train_step = self.train_step
+
+        if True:
+            train_step = enzyme(train_step, True)
 
         step_function = self._make_function(train_step)
 
@@ -487,6 +313,9 @@ class JAXTrainer(base_trainer.Trainer):
             test_step = jax.jit(self.test_step, donate_argnums=0)
         else:
             test_step = self.test_step
+
+        if True:
+            test_step = enzyme(test_step, False)
 
         step_function = self._make_function(test_step)
 
